@@ -1,5 +1,5 @@
 # Vinci - An Online Egocentric Video-Language Assistant
-<a src="https://img.shields.io/badge/cs.CV-2412.21080-b31b1b?logo=arxiv&logoColor=red" href="https://arxiv.org/abs/2412.21080"> <img src="https://img.shields.io/badge/cs.CV-2412.21080-b31b1b?logo=arxiv&logoColor=red">
+<a src="https://img.shields.io/badge/cs.CV-2412.21080-b31b1b?logo=arxiv&logoColor=red" href="https://arxiv.org/abs/2503.04250"> <img src="https://img.shields.io/badge/cs.CV-2412.21080-b31b1b?logo=arxiv&logoColor=red">
 </a>  <a href="https://huggingface.co/hyf015/Vinci-8B-ckpt"><img src="https://huggingface.co/datasets/huggingface/badges/raw/main/open-in-hf-spaces-sm-dark.svg" alt="Open in Spaces"> </a> 
 
 > **Vinci: A Real-time Embodied Smart Assistant based on Egocentric Vision-Language Model**<br>
