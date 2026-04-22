@@ -1,12 +1,14 @@
 #!/bin/bash
 
 CUDA="0"
+DEVICE="auto"
 RUNNING_LANGUAGE='chn'
 VERSION='v1'
 
 while [[ "$#" -gt 0 ]]; do
     case $1 in
         --cuda) CUDA="$2"; shift ;;
+        --device) DEVICE="$2"; shift ;;
         --version) VERSION="$2"; shift ;;
         --language) RUNNING_LANGUAGE="$2"; shift ;;
         start) COMMAND_ACTION="start" ;;
@@ -17,7 +19,12 @@ while [[ "$#" -gt 0 ]]; do
     shift
 done
 
+if [[ -z "$COMMAND_ACTION" ]]; then
+    echo "Usage: $0 {start|stop|restart} [--device auto|cuda|mps|cpu] [--cuda <CUDA_VISIBLE_DEVICES>] [--language chn|eng] [--version v0|v1]"
+    exit 1
+fi
+
 cd vinci-local/docker
 ./boot.sh "$COMMAND_ACTION"
 cd ../..
-./vinci-inference/boot.sh --cuda "$CUDA" --language "$RUNNING_LANGUAGE" --version "$VERSION" "$COMMAND_ACTION"
+./vinci-inference/boot.sh --device "$DEVICE" --cuda "$CUDA" --language "$RUNNING_LANGUAGE" --version "$VERSION" "$COMMAND_ACTION"

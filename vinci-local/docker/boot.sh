@@ -6,6 +6,36 @@ HOSTNAME_ARG=""
 PULL_ARG=""
 ACTION="start"
 
+resolve_lan_ip() {
+    if [[ "$OSTYPE" == "darwin"* ]]; then
+        local ip
+        ip=$(ipconfig getifaddr en0 2>/dev/null || true)
+        if [[ -z "$ip" ]]; then
+            ip=$(ipconfig getifaddr en1 2>/dev/null || true)
+        fi
+        if [[ -n "$ip" ]]; then
+            echo "$ip"
+            return 0
+        fi
+        ip=$(ifconfig | awk '/inet / && $2 != "127.0.0.1" {print $2; exit}')
+        if [[ -n "$ip" ]]; then
+            echo "$ip"
+            return 0
+        fi
+    fi
+
+    if command -v hostname >/dev/null 2>&1; then
+        local host_ip
+        host_ip=$(hostname -I 2>/dev/null | awk '{print $1}')
+        if [[ -n "$host_ip" ]]; then
+            echo "$host_ip"
+            return 0
+        fi
+    fi
+
+    return 1
+}
+
 while [[ "$#" -gt 0 ]]; do
     case $1 in
         --hostname)
@@ -23,7 +53,11 @@ done
 if [ -n "$HOSTNAME_ARG" ]; then
     LAN_IP="$HOSTNAME_ARG"
 else
-    LAN_IP=$(hostname -I | awk '{print $1}')
+    LAN_IP=$(resolve_lan_ip)
+    if [[ -z "$LAN_IP" ]]; then
+        echo "Unable to detect LAN IP automatically. Please pass --hostname <your-ip>."
+        exit 1
+    fi
 fi
 
 echo "LAN IP: $LAN_IP"

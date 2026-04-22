@@ -16,6 +16,7 @@ CONDA_ENV=vinci
 
 # 默认的 CUDA 设备
 DEFAULT_CUDA_VISIBLE_DEVICES="0"
+DEFAULT_DEVICE="auto"
 DEFAULT_RUNNING_LANGUAGE='chn'
 DEFAULT_VERSION="v1"
 
@@ -29,15 +30,16 @@ mkdir -p "$(dirname "$PID_FILE")"
 
 # 函数：启动服务
 start_service() {
-    export CUDA_VISIBLE_DEVICES=$1
-    export RUNNING_LANGUAGE=$2
-    export VERSION=$3
+    export CUDA_VISIBLE_DEVICES="$1"
+    export VINCI_DEVICE="$2"
+    export RUNNING_LANGUAGE="$3"
+    export VERSION="$4"
 
     echo "Activating conda environment: $CONDA_ENV"
-    source $(conda info --base)/etc/profile.d/conda.sh
-    conda activate $CONDA_ENV
+    source "$(conda info --base)/etc/profile.d/conda.sh"
+    conda activate "$CONDA_ENV"
 
-    echo "Starting service with CUDA_VISIBLE_DEVICES=$CUDA_VISIBLE_DEVICES..."
+    echo "Starting service with VINCI_DEVICE=$VINCI_DEVICE, CUDA_VISIBLE_DEVICES=$CUDA_VISIBLE_DEVICES..."
     $COMMAND &
     echo $! > $PID_FILE
     echo "Service started with PID $(cat $PID_FILE)"
@@ -60,18 +62,20 @@ stop_service() {
 restart_service() {
     echo "Restarting service..."
     stop_service
-    start_service $1 $2
+    start_service "$1" "$2" "$3" "$4"
     echo "Service restarted."
 }
 
 # 主逻辑
 CUDA_VISIBLE_DEVICES=$DEFAULT_CUDA_VISIBLE_DEVICES
+DEVICE=$DEFAULT_DEVICE
 RUNNING_LANGUAGE=$DEFAULT_RUNNING_LANGUAGE
 VERSION=$DEFAULT_VERSION
 
 while [[ "$#" -gt 0 ]]; do
     case $1 in
         --cuda) CUDA_VISIBLE_DEVICES="$2"; shift ;;
+        --device) DEVICE="$2"; shift ;;
         --version) VERSION="$2"; shift ;;
         --language) RUNNING_LANGUAGE="$2"; shift ;;
         start) COMMAND_ACTION="start" ;;
@@ -84,16 +88,16 @@ done
 
 case "$COMMAND_ACTION" in
     start)
-        start_service $CUDA_VISIBLE_DEVICES $RUNNING_LANGUAGE $VERSION
+        start_service "$CUDA_VISIBLE_DEVICES" "$DEVICE" "$RUNNING_LANGUAGE" "$VERSION"
         ;;
     stop)
         stop_service
         ;;
     restart)
-        restart_service $CUDA_VISIBLE_DEVICES $RUNNING_LANGUAGE $VERSION
+        restart_service "$CUDA_VISIBLE_DEVICES" "$DEVICE" "$RUNNING_LANGUAGE" "$VERSION"
         ;;
     *)
-        echo "Usage: $0 {start|stop|restart} [--cuda <CUDA_VISIBLE_DEVICES>] [--language chn/eng] [--version v0/v1]"
+        echo "Usage: $0 {start|stop|restart} [--device auto|cuda|mps|cpu] [--cuda <CUDA_VISIBLE_DEVICES>] [--language chn|eng] [--version v0|v1]"
         exit 1
         ;;
 esac
