@@ -15,12 +15,48 @@ from global_var import FIFOSafeCache
 history_cache = FIFOSafeCache(capacity=1000)
 first_chat_timestamp_cache = FIFOSafeCache(capacity=1000)
 
-def init_model(sep_chat: False, stream: bool=False, device: str='cuda:0', language: str='chn', version: str='v1'):
+
+def resolve_device(preferred: str = "auto") -> str:
+    preferred = (preferred or "auto").lower()
+    if preferred == "auto":
+        if torch.cuda.is_available():
+            return "cuda:0"
+        if torch.backends.mps.is_available():
+            return "mps"
+        return "cpu"
+    if preferred in {"cuda", "cuda:0"}:
+        return "cuda:0" if torch.cuda.is_available() else ("mps" if torch.backends.mps.is_available() else "cpu")
+    if preferred == "mps":
+        return "mps" if torch.backends.mps.is_available() else ("cuda:0" if torch.cuda.is_available() else "cpu")
+    if preferred == "cpu":
+        return "cpu"
+    return preferred
+
+
+def resolve_available_devices(preferred: str = "auto") -> list:
+    preferred = (preferred or "auto").lower()
+    if preferred in {"auto", "cuda", "cuda:0"} and torch.cuda.is_available():
+        return [f'cuda:{i}' for i in range(torch.cuda.device_count())]
+    if preferred in {"auto", "mps"} and torch.backends.mps.is_available():
+        return ["mps"]
+    return ["cpu"]
+
+
+def normalize_model_index(model_index: int, size: int) -> int:
+    if size <= 0:
+        raise RuntimeError("No model instances were initialized.")
+    if model_index < 0:
+        return size - 1
+    if model_index >= size:
+        return model_index % size
+    return model_index
+
+
+def init_model(sep_chat: False, stream: bool=False, device: str='auto', language: str='chn', version: str='v1'):
     print(f'Initializing VLChat, sep_chat: {sep_chat}, stream: {stream}, device: {device}')
-    with torch.device(device):
-        chat = Chat(sep_chat=sep_chat, stream=stream, language=language, version=version)
-        print('Initialization Finished')
-        return chat
+    chat = Chat(sep_chat=sep_chat, stream=stream, language=language, version=version, device=device)
+    print('Initialization Finished')
+    return chat
 
 
 def add_history(question, history, sep_chat: bool=False, language: str='chn'):
@@ -72,13 +108,15 @@ def add_history(question, history, sep_chat: bool=False, language: str='chn'):
 class IntervlChat():
 
     def __init__(self, sep_chat: bool=False, stream: bool=False, 
-                 device: str='cuda:0', language: str='chn', version: str='v1'):
+                 device: str='auto', language: str='chn', version: str='v1'):
         self.sep_chat = sep_chat
         self.language = language
         self.device = device
         self.stream = stream
         self.version = version
         self.intervl_chat = init_model(sep_chat, stream=self.stream, device=device, language=language, version=version)
+        self.device = self.intervl_chat.device
+        self.model_dtype = self.intervl_chat.model_dtype
         self.origin_intervl_model = self.intervl_chat.model
 
     # frame是否可以resize
@@ -135,21 +173,20 @@ class IntervlChat():
         """
         print(f"silent chat history: {history}")
         print(f"silent chat timestamp: {timestamp}")
+
+        pixel_values, num_patches_list = self.load_video_frames(frames)
+        pixel_values = pixel_values.to(dtype=self.model_dtype, device=self.device)
+
+        video_prefix = ''.join([f'Frame{i+1}: <image>\n' for i in range(len(num_patches_list))])
+        question = video_prefix + '现在视频到了 %.1f 秒处. 简单的描述视频中我的动作.' % timestamp
+        response, _history = self._chat(self.origin_intervl_model, self.intervl_chat.tokenizer, pixel_values, question, num_patches_list)
+        history.append((timestamp, response))
+        # print('VL_HISTORY:', _history)
+
+        # print('Real question at %2.1f is |||' % (timestamp), question)
+        # print('Answer at %2.1f is ||| '% (timestamp), response)
         
-        with torch.device(self.device):
-            pixel_values, num_patches_list = self.load_video_frames(frames)
-            pixel_values = pixel_values.to(torch.bfloat16).cuda()
-
-            video_prefix = ''.join([f'Frame{i+1}: <image>\n' for i in range(len(num_patches_list))])
-            question = video_prefix + '现在视频到了 %.1f 秒处. 简单的描述视频中我的动作.' % timestamp
-            response, _history = self._chat(self.origin_intervl_model, self.intervl_chat.tokenizer, pixel_values, question, num_patches_list)
-            history.append((timestamp, response))
-            # print('VL_HISTORY:', _history)
-
-            # print('Real question at %2.1f is |||' % (timestamp), question)
-            # print('Answer at %2.1f is ||| '% (timestamp), response)
-            
-            return response, history
+        return response, history
 
     def chat_unsafe(self, question: str, frames: list, history: list=[], timestamp: int=0, silent: bool=False):
         """
@@ -168,74 +205,73 @@ class IntervlChat():
         """
         print(f"chat history: {history}")
         print(f"chat timestamp: {timestamp}")
-        
-        with torch.device(self.device):
-            pixel_values, num_patches_list = self.load_video_frames(frames)
-            pixel_values = pixel_values.to(torch.bfloat16).cuda()
 
-            video_prefix = ''.join([f'Frame{i+1}: <image>\n' for i in range(len(num_patches_list))])
+        pixel_values, num_patches_list = self.load_video_frames(frames)
+        pixel_values = pixel_values.to(dtype=self.model_dtype, device=self.device)
 
-            if self.sep_chat:
-                quest = video_prefix + '现在视频到了 %.1f 秒处. 描述视频中我的动作.' % timestamp
-                response, _ = self._chat(self.origin_intervl_model, self.intervl_chat.tokenizer, pixel_values, quest, num_patches_list)
-                
-                history.append((timestamp, response))
-                question = add_history(question, history, self.sep_chat, self.language)
-#                 question = add_history(question, history)
-                
-                print(f"chat question: {question}")
-                if self.stream:
-                    streamer = self._chat_stream(self.intervl_chat.lmmodel, self.intervl_chat.tokenizer, None, question, 
-                                                    self.intervl_chat.lmgeneration_config, num_patches_list)
-                    
-                    for new_text in streamer:
-                        if new_text == self.intervl_chat.lmmodel.conv_template.sep:
-                            return new_text, history
-                        
-                        yield new_text, history
-                else:
-                    response, _ = self._chat(self.intervl_chat.model, self.intervl_chat.tokenizer, None, question, 
-                                                self.intervl_chat.generation_config, num_patches_list)
-                                    
-                    print('Real question at %2.1f is |||' % timestamp, question)
-                    print('Answer at %2.1f is ||| '%timestamp, response)
+        video_prefix = ''.join([f'Frame{i+1}: <image>\n' for i in range(len(num_patches_list))])
 
-                    yield response, history
-            else:
-                question = '现在视频到了%.1f秒处. ' % timestamp + question 
-                question = add_history(question, history, self.sep_chat)
-                question = video_prefix + question
-
-                print(f"chat question: {question}")
-
-                if self.stream:
-                    streamer = self._chat_stream(self.intervl_chat.model, self.intervl_chat.tokenizer, pixel_values, question, 
-                                                 self.intervl_chat.generation_config, num_patches_list)
-
-                    for new_text in self.intervl_chat.streamer:
-                        if new_text == self.intervl_chat.model.conv_template.sep:
-                            print(f"set history: {history}")
-                            return new_text, history
-                        
-                        yield new_text, history
-                    # response, _ = self._chat(self.intervl_chat.model, self.intervl_chat.tokenizer, pixel_values, question, num_patches_list)
+        if self.sep_chat:
+            quest = video_prefix + '现在视频到了 %.1f 秒处. 描述视频中我的动作.' % timestamp
+            response, _ = self._chat(self.origin_intervl_model, self.intervl_chat.tokenizer, pixel_values, quest, num_patches_list)
             
-                    # print('Real question at %2.1f is |||' % timestamp, question)
-                    # print('Answer at %2.1f is ||| '%timestamp, response)
-
-                    # yield response, history
+            history.append((timestamp, response))
+            question = add_history(question, history, self.sep_chat, self.language)
+#                 question = add_history(question, history)
+            
+            print(f"chat question: {question}")
+            if self.stream:
+                streamer = self._chat_stream(self.intervl_chat.lmmodel, self.intervl_chat.tokenizer, None, question, 
+                                                self.intervl_chat.lmgeneration_config, num_patches_list)
+                
+                for new_text in streamer:
+                    if new_text == self.intervl_chat.lmmodel.conv_template.sep:
+                        return new_text, history
                     
-                else:
-                    response, _ = self._chat(self.intervl_chat.model, self.intervl_chat.tokenizer, pixel_values, question, num_patches_list)
+                    yield new_text, history
+            else:
+                response, _ = self._chat(self.intervl_chat.model, self.intervl_chat.tokenizer, None, question, 
+                                            self.intervl_chat.generation_config, num_patches_list)
+                                
+                print('Real question at %2.1f is |||' % timestamp, question)
+                print('Answer at %2.1f is ||| '%timestamp, response)
 
-                    print('Real question at %2.1f is |||' % timestamp, question)
-                    print('Answer at %2.1f is ||| '%timestamp, response)
+                yield response, history
+        else:
+            question = '现在视频到了%.1f秒处. ' % timestamp + question 
+            question = add_history(question, history, self.sep_chat)
+            question = video_prefix + question
 
-                    yield response, history
+            print(f"chat question: {question}")
 
-# 获取所有可用的CUDA设备
-available_devices = [f'cuda:{i}' for i in range(torch.cuda.device_count())]
-print(f"availabel devices: {available_devices}")
+            if self.stream:
+                streamer = self._chat_stream(self.intervl_chat.model, self.intervl_chat.tokenizer, pixel_values, question, 
+                                                self.intervl_chat.generation_config, num_patches_list)
+
+                for new_text in self.intervl_chat.streamer:
+                    if new_text == self.intervl_chat.model.conv_template.sep:
+                        print(f"set history: {history}")
+                        return new_text, history
+                    
+                    yield new_text, history
+                # response, _ = self._chat(self.intervl_chat.model, self.intervl_chat.tokenizer, pixel_values, question, num_patches_list)
+        
+                # print('Real question at %2.1f is |||' % timestamp, question)
+                # print('Answer at %2.1f is ||| '%timestamp, response)
+
+                # yield response, history
+                
+            else:
+                response, _ = self._chat(self.intervl_chat.model, self.intervl_chat.tokenizer, pixel_values, question, num_patches_list)
+
+                print('Real question at %2.1f is |||' % timestamp, question)
+                print('Answer at %2.1f is ||| '%timestamp, response)
+
+                yield response, history
+
+preferred_device = os.environ.get('VINCI_DEVICE', 'auto')
+available_devices = resolve_available_devices(preferred_device)
+print(f"available devices ({preferred_device}): {available_devices}")
 
 sep_chat = False
 stream = True
@@ -267,7 +303,7 @@ def chat(question: str, frames: list, history: list=[], session_id: str="default
          timestamp: int=0, silent: bool=False, model_index: int=0):
     print(f"session id: {session_id}")
 
-    chat = chats[model_index]
+    chat = chats[normalize_model_index(model_index, len(chats))]
     timestamp = get_timestamp(session_id)
     history = get_history(session_id)
 
@@ -298,7 +334,7 @@ def stream_chat(question: str, frames: list, history: list, session_id: str="def
                 timestamp: int=0, silent: bool=False, model_index: int=0):
     print(f"session id: {session_id}")
 
-    chat = chats[model_index]
+    chat = chats[normalize_model_index(model_index, len(chats))]
     timestamp = get_timestamp(session_id)
     history = get_history(session_id)
 

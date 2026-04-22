@@ -13,6 +13,31 @@ IMAGENET_MEAN = (0.485, 0.456, 0.406)
 IMAGENET_STD = (0.229, 0.224, 0.225)
 
 
+def resolve_device(preferred: str = "auto") -> str:
+    preferred = (preferred or "auto").lower()
+    if preferred == "auto":
+        if torch.cuda.is_available():
+            return "cuda:0"
+        if torch.backends.mps.is_available():
+            return "mps"
+        return "cpu"
+    if preferred in {"cuda", "cuda:0"}:
+        return "cuda:0" if torch.cuda.is_available() else ("mps" if torch.backends.mps.is_available() else "cpu")
+    if preferred == "mps":
+        return "mps" if torch.backends.mps.is_available() else ("cuda:0" if torch.cuda.is_available() else "cpu")
+    if preferred == "cpu":
+        return "cpu"
+    return preferred
+
+
+def select_torch_dtype(device: str) -> torch.dtype:
+    if device.startswith("cuda"):
+        return torch.bfloat16
+    if device == "mps":
+        return torch.float16
+    return torch.float32
+
+
 def build_transform(input_size):
     MEAN, STD = IMAGENET_MEAN, IMAGENET_STD
     transform = T.Compose([
@@ -89,14 +114,16 @@ def load_image(image_file, input_size=448, max_num=6):
 
 
 class Chat():
-    def __init__(self, path='Vinci-8B-base', path2='Vinci-8B-ckpt', sep_chat=False, stream=True, device='cuda:0', use_chat_history=False, language='chn', version='v0'):
+    def __init__(self, path='Vinci-8B-base', path2='Vinci-8B-ckpt', sep_chat=False, stream=True, device='auto', use_chat_history=False, language='chn', version='v0'):
         super().__init__()
-        self.device = device
+        self.device = resolve_device(device)
+        self.model_dtype = select_torch_dtype(self.device)
         self.vr = None
         self.video_fps = None
         self.prev_timestamp = 0
         self.history = []
         self.chat_history = []
+        self.sep_chat = sep_chat
         self.stream = stream
         self.use_chat_history = use_chat_history
         self.transform = build_transform(input_size=448)
@@ -110,10 +137,10 @@ class Chat():
 
         self.model = AutoModel.from_pretrained(
             path,
-            torch_dtype=torch.bfloat16,
+            torch_dtype=self.model_dtype,
             low_cpu_mem_usage=True,
             trust_remote_code=True)
-        if 'version' == 'v0':
+        if version == 'v0':
             model_weights1 = load_file(os.path.join(path2,"model-00001-of-00004.safetensors"))
             model_weights2 = load_file(os.path.join(path2,"model-00002-of-00004.safetensors"))
             model_weights3 = load_file(os.path.join(path2,"model-00003-of-00004.safetensors"))
@@ -122,8 +149,8 @@ class Chat():
             self.model.wrap_llm_lora(r=16, lora_alpha=2 * 16)
             msg = self.model.load_state_dict(merged_weight,strict=False)
 
-        self.model = self.model.eval().cuda()
-        state1 = self.model.state_dict()
+        self.model = self.model.eval().to(device=self.device, dtype=self.model_dtype)
+        print(f'VL model running on device={self.device}, dtype={self.model_dtype}')
         self.tokenizer = AutoTokenizer.from_pretrained(path, trust_remote_code=True)
         if self.stream:
             self.streamer = TextIteratorStreamer(self.tokenizer, skip_prompt=True, skip_special_tokens=True, timeout=10)
@@ -165,7 +192,7 @@ class Chat():
 
     def answer(self, conv, timestamp=0, add_to_history=False):
         pixel_values, num_patches_list = self.load_video_timestamp(timestamp)
-        pixel_values = pixel_values.to(torch.bfloat16).cuda()
+        pixel_values = pixel_values.to(dtype=self.model_dtype, device=self.device)
         video_prefix = ''.join([f'Frame{i+1}: <image>\n' for i in range(len(num_patches_list))])
         if add_to_history: # silent ask
             if self.language == 'chn':
