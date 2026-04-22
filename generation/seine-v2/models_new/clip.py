@@ -1,4 +1,5 @@
 import numpy
+import torch
 import torch.nn as nn
 from transformers import CLIPTokenizer, CLIPTextModel
 
@@ -29,14 +30,30 @@ class AbstractEncoder(nn.Module):
         raise NotImplementedError
 
 
+def resolve_torch_device(preferred: str = "auto") -> str:
+    preferred = (preferred or "auto").lower()
+    if preferred == "auto":
+        if torch.cuda.is_available():
+            return "cuda"
+        if torch.backends.mps.is_available():
+            return "mps"
+        return "cpu"
+    if preferred == "cuda":
+        return "cuda" if torch.cuda.is_available() else ("mps" if torch.backends.mps.is_available() else "cpu")
+    if preferred == "mps":
+        return "mps" if torch.backends.mps.is_available() else ("cuda" if torch.cuda.is_available() else "cpu")
+    return preferred
+
+
 class FrozenCLIPEmbedder(AbstractEncoder):
     """Uses the CLIP transformer encoder for text (from Hugging Face)"""
     # def __init__(self, version="openai/clip-vit-huge-patch14", device="cuda", max_length=77):
-    def __init__(self, path, device="cuda", max_length=77):
+    def __init__(self, path, device="auto", max_length=77):
         super().__init__()
         self.tokenizer = CLIPTokenizer.from_pretrained(path, subfolder="tokenizer")
         self.transformer = CLIPTextModel.from_pretrained(path, subfolder='text_encoder')
-        self.device = device
+        self.device = resolve_torch_device(device)
+        self.transformer = self.transformer.to(self.device)
         self.max_length = max_length
         self.freeze()
 
@@ -48,8 +65,7 @@ class FrozenCLIPEmbedder(AbstractEncoder):
     def forward(self, text):
         batch_encoding = self.tokenizer(text, truncation=True, max_length=self.max_length, return_length=True,
                                         return_overflowing_tokens=False, padding="max_length", return_tensors="pt")
-        # tokens = batch_encoding["input_ids"].to(self.device)
-        tokens = batch_encoding["input_ids"].to(self.transformer.device)
+        tokens = batch_encoding["input_ids"].to(self.device)
         outputs = self.transformer(input_ids=tokens)
 
         z = outputs.last_hidden_state
@@ -63,9 +79,9 @@ class TextEmbedder(nn.Module):
     """
     Embeds text prompt into vector representations. Also handles text dropout for classifier-free guidance.
     """
-    def __init__(self, path, dropout_prob=0.1):
+    def __init__(self, path, dropout_prob=0.1, device="auto"):
         super().__init__()
-        self.text_encodder = FrozenCLIPEmbedder(path=path)
+        self.text_encodder = FrozenCLIPEmbedder(path=path, device=device)
         self.dropout_prob = dropout_prob
     
     def token_drop(self, text_prompts, force_drop_ids=None):
@@ -114,7 +130,7 @@ if __name__ == '__main__':
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
     text_encoder = TextEmbedder(path='/mnt/petrelfs/maxin/work/pretrained/stable-diffusion-2-1-base',
-                                dropout_prob=0.00001).to(device)
+                                dropout_prob=0.00001, device=device).to(device)
 
     text_prompt = [["a photo of a cat", "a photo of a cat"], ["a photo of a dog", "a photo of a cat"], ['a photo of a dog human', "a photo of a cat"]]
     # text_prompt = ('None', 'None', 'None')

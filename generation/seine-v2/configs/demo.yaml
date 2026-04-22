@@ -12,8 +12,9 @@ image_size: [256, 256]
 
 # model speedup
 use_compile: False
-use_fp16: True
-enable_xformers_memory_efficient_attention: True
+use_fp16: False
+enable_xformers_memory_efficient_attention: False
+device: auto
 
 # sample config:
 seed:

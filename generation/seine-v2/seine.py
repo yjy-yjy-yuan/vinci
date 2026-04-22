@@ -16,8 +16,9 @@ import math
 from diffusion import create_diffusion
 
 import torch
-torch.backends.cuda.matmul.allow_tf32 = True
-torch.backends.cudnn.allow_tf32 = True
+if torch.cuda.is_available():
+    torch.backends.cuda.matmul.allow_tf32 = True
+    torch.backends.cudnn.allow_tf32 = True
 import argparse
 import torchvision
 
@@ -65,6 +66,21 @@ def mask_generation_before(mask_type, shape, dtype, device):
     else:
         raise ValueError(f"Invalid mask type: {mask_type}")
     return mask
+
+
+def resolve_device(preferred: str = "auto") -> str:
+    preferred = (preferred or "auto").lower()
+    if preferred == "auto":
+        if torch.cuda.is_available():
+            return "cuda"
+        if torch.backends.mps.is_available():
+            return "mps"
+        return "cpu"
+    if preferred == "cuda":
+        return "cuda" if torch.cuda.is_available() else ("mps" if torch.backends.mps.is_available() else "cpu")
+    if preferred == "mps":
+        return "mps" if torch.backends.mps.is_available() else ("cuda" if torch.cuda.is_available() else "cpu")
+    return preferred
     
 def get_input(args):
     input_path = args.input_path
@@ -155,13 +171,13 @@ def auto_inpainting(args, video_input, masked_video, mask, prompt, vae, text_enc
 
 
 def gen(args, model, save_path='result.mp4'):
-    model.cuda()
     print('entered gen')
     # Setup PyTorch:
     if args.seed:
         torch.manual_seed(args.seed)
     torch.set_grad_enabled(False)
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+    device = resolve_device(getattr(args, "device", os.environ.get("VINCI_DEVICE", "auto")))
+    print(f'Using device for video generation: {device}')
 
     args.latent_h = latent_h = args.image_size[0] // 8
     args.latent_w = latent_w = args.image_size[1] // 8
@@ -172,7 +188,7 @@ def gen(args, model, save_path='result.mp4'):
     if args.use_compile:
         model = torch.compile(model)
 
-    if args.enable_xformers_memory_efficient_attention:
+    if args.enable_xformers_memory_efficient_attention and device == "cuda":
         print('Using xformers memory efficient attention')
         if is_xformers_available():
             model.enable_xformers_memory_efficient_attention()
@@ -186,9 +202,14 @@ def gen(args, model, save_path='result.mp4'):
     pretrained_model_path = "seine_weights"
     
     diffusion = create_diffusion(str(args.num_sampling_steps))
+    model.to(device)
     vae.to(device)
     text_encoder.to(device)
     
+    if args.use_fp16 and device != "cuda":
+        print('Disabling fp16 because non-CUDA device was selected.')
+        args.use_fp16 = False
+
     if args.use_fp16:
         print('Warnning: using half percision for inferencing!')
         vae.to(device, dtype=torch.float16)
