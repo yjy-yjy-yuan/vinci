@@ -1,7 +1,7 @@
 import uvicorn
 import threading
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi import APIRouter
 from sse_starlette.sse import EventSourceResponse
 
@@ -42,7 +42,12 @@ async def internval_inference(req: data.InternvlInferenceRequest):
 
 @router.post("/inference/seine", response_model=data.SeineInferenceResponse)
 async def seine_inference(req: data.SeineInferenceRequest):
-    return service.seine_inference(req.prompt, req.base64_image, req.image)
+    try:
+        return service.seine_inference(req.prompt, req.base64_image, req.image)
+    except RuntimeError as e:
+        if "Seine 模型未安装" in str(e):
+            raise HTTPException(status_code=503, detail="视频生成功能未启用，请下载 Seine 模型: git clone https://huggingface.co/hyf015/seine_weights")
+        raise
 
 def build_app():
     fast_kwargs = {
