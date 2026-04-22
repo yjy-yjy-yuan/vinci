@@ -12,16 +12,22 @@
 
 ```
 pip install -r requirements/app.txt
+pip install -r requirements/client.txt
 ```
 
 ## 操作
 
 ### 启动
 
-通过`--cuda`参数指定使用的GPU。
+通过`--device`参数指定运行设备，默认为`auto`（自动选择`cuda -> mps -> cpu`）。
 
 ```
-./vinci-inference/boot.sh --cuda 4,5 start
+./vinci-inference/boot.sh --device auto start
+```
+
+Linux + CUDA 可选：
+```bash
+./vinci-inference/boot.sh --device cuda --cuda 4,5 start
 ```
 
 ### 停止
@@ -33,6 +39,5 @@ pip install -r requirements/app.txt
 ### 重启
 
 ```
-./vinci-inference/boot.sh --cuda 4,5 restart
+./vinci-inference/boot.sh --device auto restart
 ```
-

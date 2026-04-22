@@ -4,14 +4,15 @@
 
 在执行命令前，请确保设置环境变量 `CANDIDATE` 以指定服务的访问 IP（局域网地址）。
 
-- 默认情况下，使用 `hostname` 命令自动获取本地 IP。如果获取的 IP 不正确，可以通过 `--hostname` 参数手动设置。
+- 默认情况下，脚本会自动探测本地 IP（兼容 Linux/macOS）。
+- 如果获取的 IP 不正确，可以通过 `--hostname` 参数手动设置。
 
 ### 启动服务
 
 使用以下命令启动所有服务：
 
 ```bash
-boot.sh start
+./boot.sh start
 ```
 
 ### 使用流程
@@ -19,7 +20,7 @@ boot.sh start
 `rtmp://{hostname}:1935/vinci/livestream`，然后开始推流。
 
 2. 打开浏览器，访问：
-http://{hostname}:1933，点击页面上的“开启会话”按钮。
+http://{hostname}:19333，点击页面上的“开启会话”按钮。
 
 3. 使用手机进行语音唤醒并下达指令。
 
