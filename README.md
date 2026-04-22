@@ -24,20 +24,55 @@ Arxiv, 2024<br>
 ```
 git clone https://github.com/OpenGVLab/vinci.git
 conda env create -f environment.yml
+conda activate vinci
 ```
+(`environment.macos.yml` is the same macOS environment definition.)
+
+Linux + NVIDIA CUDA users can still use the original pinned environment:
+```bash
+conda env create -f environment.linux-cuda.yml
+conda activate vinci
+```
+
 Requirements:
-- python 3.8 and above
+- python 3.9 and above
 - pytorch 2.0 and above are recommended
-- CUDA 11.4 and above are recommended
+- macOS (Apple Silicon) runs with `mps` or `cpu` (`--device auto` by default)
+- Linux with NVIDIA GPU runs with CUDA (`--device cuda`, optionally `--cuda`)
 - Docker is required when deploying streaming demo
 - Gradio is required when using local web-based demo
 <br>
 
 ### Downloading Checkpoints
-```
+
+**Option 1: Full download (includes video generation)**
+
+```bash
 bash download.sh
 ```
-Running download.sh will take up >100GB disk space.
+
+This will download all models (>100GB disk space), including:
+- `Vinci-8B-base` - Core dialogue/QA model
+- `Vinci-8B-ckpt` - Checkpoint model
+- `seine_weights` - Video generation model (for future video prediction)
+
+**Option 2: Minimal download (dialogue/QA only, ~20GB less)**
+
+If you don't need the "generate future video" feature, you can save space:
+
+```bash
+bash download_minimal.sh
+```
+
+This only downloads:
+- `Vinci-8B-base` - Core dialogue/QA model
+- `Vinci-8B-ckpt` - Checkpoint model
+
+The system will still work without `seine_weights`, only the video generation feature will be disabled. You can add it later if needed:
+
+```bash
+git clone https://huggingface.co/hyf015/seine_weights
+```
 
 ## 🎓 Getting Started
 We offer two ways to run our Vinci model
@@ -45,10 +80,11 @@ We offer two ways to run our Vinci model
 ### 🎬  Online Streaming Demo
 1. start the frontend, backend and model services: 
 ```bash
-sudo ./boot.sh {start|stop|restart} [--cuda <CUDA_VISIBLE_DEVICES>] [--language chn/eng] [--version v0/v1]
+./boot.sh {start|stop|restart} [--device auto|cuda|mps|cpu] [--cuda <CUDA_VISIBLE_DEVICES>] [--language chn/eng] [--version v0/v1]
 ```
 
-- --cuda <CUDA_VISIBLE_DEVICES>: Specify the GPU devices to run the model
+- --device <auto|cuda|mps|cpu>: Runtime device selection. `auto` chooses `cuda -> mps -> cpu`.
+- --cuda <CUDA_VISIBLE_DEVICES>: CUDA GPU index list, only used when `--device cuda`.
 - --language <chn|eng>: Choose the language for the demo (default: chn).
   - chn: Chinese 
   - eng: English
@@ -62,7 +98,11 @@ Then use the browser to access the frontend page：http://YOUR_IP_ADDRESS:19333 
 2. Push live stream
 With an smartphone app or GoPro/DJI cameras, push the stream to: `rtmp://YOUR_IP_ADDRESS/vinci/livestream`
 
-With a webcam, use the following command: `ffmpeg -f video4linux2 -framerate 30 -video_size 1280x720 -i /dev/video1 -f alsa -i default  -vcodec libx264 -preset ultrafast -pix_fmt yuv420p -video_size 1280x720   -c:a aac -threads 0 -f flv rtmp://YOUR_IP_ADDRESS:1935/vinci/livestream`
+With a Linux webcam:
+`ffmpeg -f video4linux2 -framerate 30 -video_size 1280x720 -i /dev/video1 -f alsa -i default -vcodec libx264 -preset ultrafast -pix_fmt yuv420p -video_size 1280x720 -c:a aac -threads 0 -f flv rtmp://YOUR_IP_ADDRESS:1935/vinci/livestream`
+
+With a macOS webcam:
+`ffmpeg -f avfoundation -framerate 30 -video_size 1280x720 -i "0:0" -vcodec libx264 -preset ultrafast -pix_fmt yuv420p -c:a aac -f flv rtmp://YOUR_IP_ADDRESS:1935/vinci/livestream`
 
 #### Interact with Online Video Streaming Demo
 1. Activate Model Service: To wake up the model and begin using it, simply say the wake-up phrase: "你好望舒 (Ni hao wang shu)" (Currently, only Chinese wakeup command is supported)
@@ -72,9 +112,9 @@ Tip: For the best experience, speak clearly and at a moderate pace.
 
 ### 🎬 Gradio Demo for uploaded videos
 ```bash
-python demovl.py [--language chn/eng] [--version v0/v1]
+python demovl.py [--device auto|cuda|mps|cpu] [--language chn/eng] [--version v0/v1]
 ```
-- --cuda <CUDA_VISIBLE_DEVICES>: Specify the GPU devices to run the model
+- --device <auto|cuda|mps|cpu>: Runtime device selection. `auto` chooses `cuda -> mps -> cpu`.
 - --language <chn|eng>: Choose the language for the demo (default: chn).
   - chn: Chinese 
   - eng: English
