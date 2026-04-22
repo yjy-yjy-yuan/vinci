@@ -9,13 +9,26 @@ import threading
 import sys
 sys.path.append('generation/seine-v2/')
 # torchvision.set_video_backend('video_reader')
-from seine import gen, model_seine
-from omegaconf import OmegaConf
-omega_conf = OmegaConf.load('generation/seine-v2/configs/demo.yaml')
-omega_conf.run_time = 13
-omega_conf.input_path = ''
-omega_conf.text_prompt = []
-omega_conf.save_img_path = '.'
+
+# Seine 模型是可选的（用于视频生成功能）
+SEINE_AVAILABLE = False
+omega_conf = None
+model_seine = None
+gen = None
+
+try:
+    from seine import gen, model_seine
+    from omegaconf import OmegaConf
+    omega_conf = OmegaConf.load('generation/seine-v2/configs/demo.yaml')
+    omega_conf.run_time = 13
+    omega_conf.input_path = ''
+    omega_conf.text_prompt = []
+    omega_conf.save_img_path = '.'
+    SEINE_AVAILABLE = True
+    print("Seine 模型已加载，视频生成功能可用")
+except Exception as e:
+    print(f"警告: Seine 模型不可用（需要 seine_weights）: {e}")
+    print("视频生成功能将被禁用。如需启用，请下载: git clone https://huggingface.co/hyf015/seine_weights")
 
 import argparse
 
@@ -23,6 +36,7 @@ import argparse
 parser = argparse.ArgumentParser(description='Argument Parser Example')
 parser.add_argument('--version', type=str, help='v0 or v1', default='v1')
 parser.add_argument('--language', type=str, help='chn or eng', default='chn')
+parser.add_argument('--device', type=str, help='auto/cuda/mps/cpu', default=os.getenv('VINCI_DEVICE', 'auto'))
 args = parser.parse_args()
 version = args.version
 running_language = args.language
@@ -52,6 +66,31 @@ import os
 
 IMAGENET_MEAN = (0.485, 0.456, 0.406)
 IMAGENET_STD = (0.229, 0.224, 0.225)
+
+
+def resolve_device(preferred: str = "auto") -> str:
+    preferred = (preferred or "auto").lower()
+    if preferred == "auto":
+        if torch.cuda.is_available():
+            return "cuda:0"
+        if torch.backends.mps.is_available():
+            return "mps"
+        return "cpu"
+    if preferred in {"cuda", "cuda:0"}:
+        return "cuda:0" if torch.cuda.is_available() else ("mps" if torch.backends.mps.is_available() else "cpu")
+    if preferred == "mps":
+        return "mps" if torch.backends.mps.is_available() else ("cuda:0" if torch.cuda.is_available() else "cpu")
+    if preferred == "cpu":
+        return "cpu"
+    return preferred
+
+
+def select_torch_dtype(device: str) -> torch.dtype:
+    if device.startswith("cuda"):
+        return torch.bfloat16
+    if device == "mps":
+        return torch.float16
+    return torch.float32
 
 
 def build_transform(input_size):
@@ -121,8 +160,9 @@ def dynamic_preprocess(image, min_num=1, max_num=6, image_size=448, use_thumbnai
 
 
 class Chat:
-    def __init__(self, path='Vinci-8B-base', stream=True, device='cuda:0', use_chat_history=False, language='chn', version='v1', max_history=10):
-        self.device = device
+    def __init__(self, path='Vinci-8B-base', stream=True, device='auto', use_chat_history=False, language='chn', version='v1', max_history=10):
+        self.device = resolve_device(device)
+        self.model_dtype = select_torch_dtype(self.device)
         self.vr = None
         self.video_fps = None
         self.prev_timestamp = 0
@@ -136,7 +176,7 @@ class Chat:
         self.max_history = max_history
         self.model = AutoModel.from_pretrained(
                 path,
-                torch_dtype=torch.bfloat16,
+                torch_dtype=self.model_dtype,
                 low_cpu_mem_usage=True,
                 trust_remote_code=True)
         self.model_lock = threading.Lock()
@@ -155,8 +195,8 @@ class Chat:
             self.model.wrap_llm_lora(r=16, lora_alpha=2 * 16)
             msg = self.model.load_state_dict(merged_weight,strict=False)
             print(msg)
-        self.model = self.model.eval().cuda()
-        state1 = self.model.state_dict()
+        self.model = self.model.eval().to(device=self.device, dtype=self.model_dtype)
+        print(f'VL model running on device={self.device}, dtype={self.model_dtype}')
         self.tokenizer = AutoTokenizer.from_pretrained(path, trust_remote_code=True)
         if self.stream:
             self.streamer = TextIteratorStreamer(self.tokenizer, skip_prompt=True, skip_special_tokens=True, timeout=10)
@@ -203,7 +243,7 @@ class Chat:
     def answer(self, conv, timestamp=0, add_to_history=False):
         with self.model_lock:
             pixel_values, num_patches_list = self.load_video_timestamp(timestamp)
-            pixel_values = pixel_values.to(torch.bfloat16).cuda()
+            pixel_values = pixel_values.to(dtype=self.model_dtype, device=self.device)
             video_prefix = ''.join([f'Frame{i+1}: <image>\n' for i in range(len(num_patches_list))])
             if add_to_history: # silent ask
                 if self.language == 'chn':
@@ -302,7 +342,7 @@ class Chat:
 # ========================================
 def init_model():
     print('Initializing VLChat')
-    chat = Chat(stream=False, version=args.version, language=args.language)
+    chat = Chat(stream=False, version=args.version, language=args.language, device=args.device)
     print('Initialization Finished')
     return chat
 chat = init_model()
@@ -468,7 +508,7 @@ with gr.Blocks(title="Vinci Demo",theme=gvlabtheme,css="#chatbot {overflow:auto;
                     outvideo_interface = gr.Video(label="output video", elem_id="gr_outvideo", visible=True, height=360) 
             with gr.Row():
                 with gr.Column(scale=0.5):
-                    generate_button = gr.Button(value="Video how-to demo", interactive=True, variant="primary")
+                    generate_button = gr.Button(value="Video how-to demo", interactive=SEINE_AVAILABLE, variant="primary")
                 with gr.Column(scale=0.5):
                     generate_clear_button = gr.Button(value="Clear", interactive=True, variant="primary")
     gr_video_time = gr.Number(value=-1, visible=False)
@@ -489,6 +529,9 @@ with gr.Blocks(title="Vinci Demo",theme=gvlabtheme,css="#chatbot {overflow:auto;
     up_video.play(video_change_init_time, [], [gr_video_time, gr_timer])
 
     def generate_video(img, conv, gr_video_time):
+        if not SEINE_AVAILABLE:
+            gr.Warning("Seine 模型未安装。视频生成功能不可用。\n请运行: git clone https://huggingface.co/hyf015/seine_weights")
+            return img, None
         text = conv["answers"][-1]
         omega_conf.input_path = './lastim.jpg'
         omega_conf.text_prompt = [text]
