@@ -1,5 +1,7 @@
 from .internvl import inference as internvl_inference
 from .internvl import stream_inference as internvl_stream_inference
+from .internvl import model_status
+from .internvl import preload_models
 
 # Seine 模型是可选的（用于视频生成功能）
 # 如果没有下载 seine_weights，此功能将不可用

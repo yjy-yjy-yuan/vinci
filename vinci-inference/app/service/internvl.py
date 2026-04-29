@@ -2,7 +2,7 @@ from sse_starlette import ServerSentEvent
 from typing import List
 
 from data import IntervlInferenceResponse
-from models import internvl_chat, internvl_stream_chat
+from models import internvl_chat, internvl_stream_chat, internvl_model_status, preload_internvl_models
 from util import url_to_ndarray, base64_to_ndarray
 
 def parse_image_from_urls(image_urls: List[str]):
@@ -66,3 +66,11 @@ def stream_inference(question: str, history: list, base64_frames: list, frames: 
                               data=IntervlInferenceResponse(answer=answer, history=[[1, "test"]], session_id=session_id).model_dump_json())
 
     yield ServerSentEvent(event="end", data="Connection closed")
+
+
+def model_status():
+    return internvl_model_status()
+
+
+def preload_models():
+    preload_internvl_models()

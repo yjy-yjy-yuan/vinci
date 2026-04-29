@@ -4,7 +4,7 @@ import os
 import time
 
 from PIL import Image
-from threading import Thread
+from threading import Lock, Thread
 
 # 设置模型加载相对路径
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', "..")))
@@ -269,17 +269,68 @@ class IntervlChat():
 
                 yield response, history
 
-preferred_device = os.environ.get('VINCI_DEVICE', 'auto')
-available_devices = resolve_available_devices(preferred_device)
-print(f"available devices ({preferred_device}): {available_devices}")
+_chat_init_lock = Lock()
+_chat_init_started_at = 0.0
+_chat_init_finished_at = 0.0
+_chat_init_error = ""
+_chat_init_loading = False
+_chats = None
 
-sep_chat = False
-stream = True
-running_language = os.environ.get('RUNNING_LANGUAGE')
-version = os.environ.get('VERSION')
-if running_language is None:
-    running_language = 'chn'
-chats = [IntervlChat(sep_chat, stream, device, running_language, version) for device in available_devices]
+
+def _build_chats():
+    preferred_device = os.environ.get('VINCI_DEVICE', 'auto')
+    available_devices = resolve_available_devices(preferred_device)
+    print(f"available devices ({preferred_device}): {available_devices}")
+
+    sep_chat = False
+    stream = True
+    running_language = os.environ.get('RUNNING_LANGUAGE') or 'chn'
+    version = os.environ.get('VERSION')
+    return [IntervlChat(sep_chat, stream, device, running_language, version) for device in available_devices]
+
+
+def _ensure_chats():
+    global _chats, _chat_init_started_at, _chat_init_finished_at, _chat_init_error, _chat_init_loading
+    if _chats:
+        return _chats
+
+    with _chat_init_lock:
+        if _chats:
+            return _chats
+        _chat_init_loading = True
+        _chat_init_started_at = time.time()
+        _chat_init_error = ""
+        try:
+            _chats = _build_chats()
+            _chat_init_finished_at = time.time()
+            return _chats
+        except Exception as exc:
+            _chat_init_finished_at = time.time()
+            _chat_init_error = str(exc)
+            raise
+        finally:
+            _chat_init_loading = False
+
+
+def preload_models_async():
+    def _runner():
+        try:
+            _ensure_chats()
+        except Exception as exc:
+            print(f"Model preload failed: {exc}")
+
+    thread = Thread(target=_runner, daemon=True)
+    thread.start()
+
+
+def model_status():
+    return {
+        "ready": bool(_chats),
+        "loading": bool(_chat_init_loading),
+        "started_at": _chat_init_started_at,
+        "finished_at": _chat_init_finished_at,
+        "error": _chat_init_error or None,
+    }
 
 def get_timestamp(session_id: str):
     current_timestamp = time.time()
@@ -303,6 +354,7 @@ def chat(question: str, frames: list, history: list=[], session_id: str="default
          timestamp: int=0, silent: bool=False, model_index: int=0):
     print(f"session id: {session_id}")
 
+    chats = _ensure_chats()
     chat = chats[normalize_model_index(model_index, len(chats))]
     timestamp = get_timestamp(session_id)
     history = get_history(session_id)
@@ -334,6 +386,7 @@ def stream_chat(question: str, frames: list, history: list, session_id: str="def
                 timestamp: int=0, silent: bool=False, model_index: int=0):
     print(f"session id: {session_id}")
 
+    chats = _ensure_chats()
     chat = chats[normalize_model_index(model_index, len(chats))]
     timestamp = get_timestamp(session_id)
     history = get_history(session_id)

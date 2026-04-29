@@ -13,6 +13,23 @@ IMAGENET_MEAN = (0.485, 0.456, 0.406)
 IMAGENET_STD = (0.229, 0.224, 0.225)
 
 
+def _env_bool(name: str, default: bool) -> bool:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _resolve_repo_path(path_value: str, env_name: str) -> str:
+    override = os.environ.get(env_name)
+    candidate = (override or path_value or "").strip()
+    if not candidate:
+        return candidate
+    if os.path.isabs(candidate):
+        return candidate
+    return os.path.abspath(os.path.join(os.path.dirname(__file__), candidate))
+
+
 def resolve_device(preferred: str = "auto") -> str:
     preferred = (preferred or "auto").lower()
     if preferred == "auto":
@@ -128,6 +145,16 @@ class Chat():
         self.use_chat_history = use_chat_history
         self.transform = build_transform(input_size=448)
         self.language = language
+        self.local_only = _env_bool("VINCI_LOCAL_ONLY", default=True)
+
+        path = _resolve_repo_path(path, "VINCI_MODEL_PATH")
+        path2 = _resolve_repo_path(path2, "VINCI_CKPT_PATH")
+
+        if self.local_only and not os.path.isdir(path):
+            raise RuntimeError(
+                f"VINCI model path not found: {path}. "
+                "Please download model weights or set VINCI_MODEL_PATH to a valid local directory."
+            )
 
         from safetensors.torch import load_file
         
@@ -139,8 +166,14 @@ class Chat():
             path,
             torch_dtype=self.model_dtype,
             low_cpu_mem_usage=True,
-            trust_remote_code=True)
+            trust_remote_code=True,
+            local_files_only=self.local_only)
         if version == 'v0':
+            if not os.path.isdir(path2):
+                raise RuntimeError(
+                    f"VINCI checkpoint path not found: {path2}. "
+                    "Please set VINCI_CKPT_PATH to a valid local directory."
+                )
             model_weights1 = load_file(os.path.join(path2,"model-00001-of-00004.safetensors"))
             model_weights2 = load_file(os.path.join(path2,"model-00002-of-00004.safetensors"))
             model_weights3 = load_file(os.path.join(path2,"model-00003-of-00004.safetensors"))
@@ -151,7 +184,10 @@ class Chat():
 
         self.model = self.model.eval().to(device=self.device, dtype=self.model_dtype)
         print(f'VL model running on device={self.device}, dtype={self.model_dtype}')
-        self.tokenizer = AutoTokenizer.from_pretrained(path, trust_remote_code=True)
+        self.tokenizer = AutoTokenizer.from_pretrained(
+            path,
+            trust_remote_code=True,
+            local_files_only=self.local_only)
         if self.stream:
             self.streamer = TextIteratorStreamer(self.tokenizer, skip_prompt=True, skip_special_tokens=True, timeout=10)
             self.generation_config = dict(
